@@ -1,0 +1,15 @@
+## Interface: 11200
+## Title: Time To Kill
+## Notes: Boss TTK estimation using RLS with forgetting factor
+## Author: Ehawne
+## Version: 3.1
+## SavedVariables: TTK_Config
+
+# Core utilities (must load first)
+TTK_Core.lua
+
+# RLS estimator (primary)
+TTK_RLS.lua
+
+# Main addon
+TimeToKill.lua
