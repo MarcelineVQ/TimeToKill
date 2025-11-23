@@ -1,20 +1,76 @@
--- TimeToKill.lua - Compact TTK display with dual RLS tracking
--- Shows HP bar with TTK, time to execute (20%), and 35s warning
+-- TimeToKill.lua - Multi-target TTK display with RLS tracking
+-- Shows HP bars for bosses and important adds with TTK estimation
 
 local EXECUTE_THRESHOLD = 0.20  -- 20% HP
 local WARNING_THRESHOLD = 40    -- Seconds
+local MAX_BARS = 5              -- Maximum tracked targets
 
 local function printo(msg)
     DEFAULT_CHAT_FRAME:AddMessage("|cff00ff00[TTK]|r " .. tostring(msg))
 end
 
 -- ============================================================================
--- MAIN FRAME SETUP - Minimal HP Bar Design
+-- ZONE-BASED MOB TRACKING TABLE
 -- ============================================================================
+
+local TTK_ZONE_MOBS = {
+    ["Molten Core"] = {
+        ["Lava Spawn"] = true, ["Son of Flame"] = true, ["Lava Elemental"] = true,
+        ["Firesworn"] = true, ["Lava Reaver"] = true, ["Lava Surger"] = true,
+        ["Core Hound"] = true, ["Ancient Core Hound"] = true,
+    },
+    ["Blackwing Lair"] = {
+        ["Death Talon Captain"] = true, ["Death Talon Flamescale"] = true,
+        ["Death Talon Seether"] = true, ["Death Talon Wyrmkin"] = true,
+        ["Blackwing Mage"] = true, ["Blackwing Warlock"] = true,
+        ["Corrupted Red Whelp"] = true, ["Chromatic Drakonid"] = true,
+    },
+    ["Temple of Ahn'Qiraj"] = {
+        ["Anubisath Sentinel"] = true, ["Anubisath Defender"] = true,
+        ["Qiraji Brainwasher"] = true, ["Vekniss Soldier"] = true,
+        ["Emperor Vek'lor"] = true, ["Emperor Vek'nilash"] = true,
+    },
+    ["Naxxramas"] = {
+        ["Crypt Guard"] = true,
+        ["Deathknight Understudy"] = true, ["Zombie Chow"] = true,
+        ["Spore"] = true, ["Unstoppable Abomination"] = true,
+    },
+    ["Zul'Gurub"] = {
+        ["Zealot Zath"] = true,
+        ["Zealot Lor'Khan"] = true,
+    },
+    ["Tower of Karazhan"] = {
+        ["Red Owl"] = true,
+        ["Blue Owl"] = true,
+        ["Living Stone"] = true,
+        ["Living Fragment"] = true,
+        ["Draenei Netherwalker"] = true,
+    },
+    -- Add more zones as needed
+}
+
+-- Mobs to never track (even if they're bosses)
+local TTK_IGNORED_MOBS = {
+    ["Majordomo Executus"] = true,
+    ["Emperor Vek'lor"] = true,
+    -- Add more ignored mobs as needed
+}
+
+local currentZoneAdds = nil  -- Points to current zone's add list
+
+-- ============================================================================
+-- MAIN FRAME SETUP
+-- ============================================================================
+
+local BAR_WIDTH = 234
+local BAR_HEIGHT = 14
+local BAR_SPACING = 2
+local EXEC_WIDTH = BAR_WIDTH * EXECUTE_THRESHOLD  -- 20% of bar
+local BASE_HEIGHT = 8  -- Padding for mainFrame
 
 local mainFrame = CreateFrame("Frame", "TTKMainFrame", UIParent)
 mainFrame:SetWidth(250)
-mainFrame:SetHeight(38)
+mainFrame:SetHeight(BASE_HEIGHT)
 mainFrame:SetPoint("CENTER", UIParent, "CENTER", 0, 200)
 mainFrame:SetScript("OnDragStart", function() mainFrame:StartMoving() end)
 mainFrame:SetScript("OnDragStop", function()
@@ -26,12 +82,10 @@ mainFrame:SetScript("OnDragStop", function()
     TTK_Config.x = x
     TTK_Config.y = y
 end)
--- registering after, might mitigate the weird 1.12 client frame crashes, might not
 mainFrame:EnableMouse(true)
 mainFrame:SetMovable(true)
 mainFrame:RegisterForDrag("LeftButton")
 
--- Background with border (border changes color for warning)
 mainFrame:SetBackdrop({
     bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background",
     edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
@@ -41,76 +95,152 @@ mainFrame:SetBackdrop({
 mainFrame:SetBackdropColor(0, 0, 0, 0.9)
 mainFrame:SetBackdropBorderColor(0.4, 0.4, 0.4, 1)
 
--- Target name (top left)
-local targetName = mainFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-targetName:SetPoint("TOPLEFT", mainFrame, "TOPLEFT", 8, -6)
-targetName:SetText("No Target")
-targetName:SetTextColor(1, 1, 1)
+-- ============================================================================
+-- BAR POOL SYSTEM
+-- ============================================================================
 
--- DPS text (center of bar - fixed position)
-local dpsLabel = mainFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-dpsLabel:SetPoint("TOP", mainFrame, "TOP", 0, -6)
-dpsLabel:SetText("")
-dpsLabel:SetTextColor(1, 1, 1)
+local barPool = {}      -- Available bars
+local activeBars = {}   -- Bars currently in use, keyed by unitID
 
--- HP display (top right) - current / max
-local hpLabel = mainFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-hpLabel:SetPoint("TOPRIGHT", mainFrame, "TOPRIGHT", -8, -6)
-hpLabel:SetText("--")
-hpLabel:SetTextColor(1, 1, 1)
+-- Create a single bar with all components
+local function CreateBar()
+    local bar = CreateFrame("Frame", nil, mainFrame)
+    bar:SetWidth(BAR_WIDTH)
+    bar:SetHeight(BAR_HEIGHT + 12)  -- Bar + text row
+    bar:Hide()
 
--- Bar dimensions
-local BAR_WIDTH = 234
-local BAR_HEIGHT = 14
-local EXEC_WIDTH = BAR_WIDTH * EXECUTE_THRESHOLD  -- 20% of bar
+    -- Top row: Name (left), DPS (center), HP (right)
+    bar.nameLabel = bar:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    bar.nameLabel:SetPoint("TOPLEFT", bar, "TOPLEFT", 0, 0)
+    bar.nameLabel:SetTextColor(1, 1, 1)
 
--- Container frame for the HP bar components
-local barFrame = CreateFrame("Frame", nil, mainFrame)
-barFrame:SetWidth(BAR_WIDTH)
-barFrame:SetHeight(BAR_HEIGHT)
-barFrame:SetPoint("TOP", mainFrame, "TOP", 0, -18)
+    bar.dpsLabel = bar:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    bar.dpsLabel:SetPoint("TOP", bar, "TOP", 0, 0)
+    bar.dpsLabel:SetTextColor(1, 1, 1)
 
--- Background (dark, always full width)
-local hpBarBg = barFrame:CreateTexture(nil, "BACKGROUND")
-hpBarBg:SetAllPoints()
-hpBarBg:SetTexture("Interface\\TargetingFrame\\UI-StatusBar")
-hpBarBg:SetVertexColor(0.15, 0.15, 0.15, 0.9)
+    bar.hpLabel = bar:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    bar.hpLabel:SetPoint("TOPRIGHT", bar, "TOPRIGHT", 0, 0)
+    bar.hpLabel:SetTextColor(1, 1, 1)
 
--- Main HP texture - anchored RIGHT, shrinks toward the right
-local hpTex = barFrame:CreateTexture(nil, "ARTWORK")
-hpTex:SetTexture("Interface\\TargetingFrame\\UI-StatusBar")
-hpTex:SetVertexColor(0.2, 0.8, 0.2)
-hpTex:SetHeight(BAR_HEIGHT)
-hpTex:SetPoint("RIGHT", barFrame, "RIGHT", 0, 0)
-hpTex:SetWidth(BAR_WIDTH)
+    -- HP bar container
+    bar.barFrame = CreateFrame("Frame", nil, bar)
+    bar.barFrame:SetWidth(BAR_WIDTH)
+    bar.barFrame:SetHeight(BAR_HEIGHT)
+    bar.barFrame:SetPoint("BOTTOMLEFT", bar, "BOTTOMLEFT", 0, 0)
 
--- Execute zone (solid red bar on the right, 20% of total width) - visual indicator only
-local execZone = barFrame:CreateTexture(nil, "ARTWORK")
-execZone:SetTexture("Interface\\TargetingFrame\\UI-StatusBar")
-execZone:SetVertexColor(0.8, 0.25, 0.25)
-execZone:SetHeight(BAR_HEIGHT)
-execZone:SetPoint("RIGHT", barFrame, "RIGHT", 0, 0)
-execZone:SetWidth(EXEC_WIDTH)
+    -- Background (layer 0)
+    bar.hpBarBg = bar.barFrame:CreateTexture(nil, "BACKGROUND")
+    bar.hpBarBg:SetAllPoints()
+    bar.hpBarBg:SetTexture("Interface\\TargetingFrame\\UI-StatusBar")
+    bar.hpBarBg:SetVertexColor(0.15, 0.15, 0.15, 0.9)
 
--- TTK text (left side of bar)
-local ttkBarLabel = barFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-ttkBarLabel:SetPoint("LEFT", barFrame, "LEFT", 4, 0)
-ttkBarLabel:SetText("--")
-ttkBarLabel:SetTextColor(1, 1, 1)
+    -- Main HP texture (layer 1)
+    bar.hpTex = bar.barFrame:CreateTexture(nil, "BORDER")
+    bar.hpTex:SetTexture("Interface\\TargetingFrame\\UI-StatusBar")
+    bar.hpTex:SetVertexColor(0.2, 0.8, 0.2)
+    bar.hpTex:SetHeight(BAR_HEIGHT)
+    bar.hpTex:SetPoint("RIGHT", bar.barFrame, "RIGHT", 0, 0)
+    bar.hpTex:SetWidth(BAR_WIDTH)
 
--- Time to Execute text (right side, in exec zone)
-local execLabel = barFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-execLabel:SetPoint("RIGHT", barFrame, "RIGHT", -4, 0)
-execLabel:SetText("")
-execLabel:SetTextColor(1, 0.9, 0.9)
+    -- Execute zone (layer 2, on top of hpTex)
+    bar.execZone = bar.barFrame:CreateTexture(nil, "ARTWORK")
+    bar.execZone:SetTexture("Interface\\TargetingFrame\\UI-StatusBar")
+    bar.execZone:SetVertexColor(0.8, 0.25, 0.25)
+    bar.execZone:SetHeight(BAR_HEIGHT)
+    bar.execZone:SetPoint("RIGHT", bar.barFrame, "RIGHT", 0, 0)
+    bar.execZone:SetWidth(EXEC_WIDTH)
+
+    -- TTK text (left side of bar)
+    bar.ttkLabel = bar.barFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    bar.ttkLabel:SetPoint("LEFT", bar.barFrame, "LEFT", 4, 0)
+    bar.ttkLabel:SetTextColor(1, 1, 1)
+
+    -- Time to Execute text (right side)
+    bar.execLabel = bar.barFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    bar.execLabel:SetPoint("RIGHT", bar.barFrame, "RIGHT", -4, 0)
+    bar.execLabel:SetTextColor(1, 0.9, 0.9)
+
+    -- Metadata
+    bar.unitID = nil
+    bar.isBoss = false
+    bar.creationOrder = 0
+
+    -- Click to target
+    bar:EnableMouse(true)
+    bar:SetScript("OnMouseUp", function()
+        if this.unitID then
+            TargetUnit(this.unitID)
+        end
+    end)
+
+    return bar
+end
+
+-- Initialize bar pool
+for i = 1, MAX_BARS do
+    table.insert(barPool, CreateBar())
+end
+
+-- Get a bar from pool
+local function AcquireBar()
+    if table.getn(barPool) > 0 then
+        return table.remove(barPool)
+    end
+    return nil  -- No bars available
+end
+
+-- Return bar to pool
+local function ReleaseBar(bar)
+    bar:Hide()
+    bar.unitID = nil
+    bar.isBoss = false
+    table.insert(barPool, bar)
+end
+
+-- Reposition all active bars and resize mainFrame
+local function RepositionBars()
+    -- Sort: bosses first (by name), then adds (by creation order)
+    local sorted = {}
+    for unitID, bar in pairs(activeBars) do
+        table.insert(sorted, bar)
+    end
+
+    table.sort(sorted, function(a, b)
+        if a.isBoss and not b.isBoss then return true end
+        if not a.isBoss and b.isBoss then return false end
+        if a.isBoss and b.isBoss then
+            return (a.nameLabel:GetText() or "") < (b.nameLabel:GetText() or "")
+        end
+        return a.creationOrder < b.creationOrder
+    end)
+
+    -- Position bars
+    local yOffset = -4
+    for i, bar in ipairs(sorted) do
+        bar:ClearAllPoints()
+        bar:SetPoint("TOPLEFT", mainFrame, "TOPLEFT", 8, yOffset)
+        bar:SetPoint("TOPRIGHT", mainFrame, "TOPRIGHT", -8, yOffset)
+        yOffset = yOffset - (BAR_HEIGHT + 12 + BAR_SPACING)
+    end
+
+    -- Resize mainFrame
+    local numBars = table.getn(sorted)
+    if numBars > 0 then
+        local totalHeight = BASE_HEIGHT + (numBars * (BAR_HEIGHT + 12 + BAR_SPACING))
+        mainFrame:SetHeight(totalHeight)
+        mainFrame:Show()
+    else
+        mainFrame:SetHeight(BASE_HEIGHT)
+        mainFrame:Hide()
+    end
+end
 
 -- ============================================================================
 -- TRACKING STATE
 -- ============================================================================
 
-local trackedMobs = {}
-local currentTargetGUID = nil
-local bossInCombat = false
+local trackedMobs = {}      -- Mob data keyed by unitID
+local creationCounter = 0   -- For ordering adds
 
 local SAMPLE_INTERVAL = 1.0
 local DISPLAY_SMOOTHING = 0.15
@@ -125,22 +255,32 @@ local function CloneEstimator(template)
     return clone
 end
 
+-- Check if a name is in the current zone's add list
+local function IsTrackedAdd(name)
+    return currentZoneAdds and currentZoneAdds[name]
+end
+
 -- Create mob tracker with dual RLS (TTK and TTE)
-local function CreateMobTracker(guid, name)
+local function CreateMobTracker(unitID, name, isBoss)
+    creationCounter = creationCounter + 1
     local mob = {
-        guid = guid,
+        unitID = unitID,
         name = name,
+        isBoss = isBoss,
         maxHp = 0,
         lastHP = nil,
         lastHPPercent = 100,
         lastSampleTime = 0,
         fightStartTime = nil,
+        creationOrder = creationCounter,
         -- Dual RLS estimators
         rlsTTK = CloneEstimator(TTK.estimators.RLS),  -- Time to Kill (HP -> 0)
         rlsTTE = CloneEstimator(TTK.estimators.RLS),  -- Time to Execute (HP -> 20%)
         -- Smoothed display values
         smoothTTK = nil,
-        smoothTTE = nil
+        smoothTTE = nil,
+        -- Associated bar
+        bar = nil
     }
     return mob
 end
@@ -165,15 +305,17 @@ local function FormatHP(hp)
     end
 end
 
-local function UpdateDisplay(mob, hp, maxHp, hpPercent)
+-- Update a single bar's display
+local function UpdateBarDisplay(mob, bar, hp, maxHp, hpPercent)
     local execThresholdPct = EXECUTE_THRESHOLD * 100  -- 20
 
-    -- Update HP display (top right) - current / max
-    hpLabel:SetText(string.format("%s / %s", FormatHP(hp), FormatHP(maxHp)))
+    -- Update name and HP display
+    bar.nameLabel:SetText(mob.name)
+    bar.hpLabel:SetText(string.format("%s / %s", FormatHP(hp), FormatHP(maxHp)))
 
-    -- Update bar width - simple linear scaling from 0-100%
+    -- Update bar width
     local barWidth = math.max(1, BAR_WIDTH * (hpPercent / 100))
-    hpTex:SetWidth(barWidth)
+    bar.hpTex:SetWidth(barWidth)
 
     -- Get TTK from RLS
     local rawTTK = mob.rlsTTK:getTTK()
@@ -189,100 +331,187 @@ local function UpdateDisplay(mob, hp, maxHp, hpPercent)
 
     -- Color based on TTK warning and execute threshold
     if hpPercent <= execThresholdPct then
-        hpTex:SetVertexColor(0.8, 0.25, 0.25)  -- Red (in execute range)
-        execZone:Hide()
+        bar.hpTex:SetVertexColor(0.8, 0.25, 0.25)  -- Red (in execute range)
+        bar.execZone:Hide()
     elseif mob.smoothTTK and mob.smoothTTK <= WARNING_THRESHOLD then
-        hpTex:SetVertexColor(0.8, 0.8, 0.2)  -- Yellow (35s warning)
-        execZone:Show()
+        bar.hpTex:SetVertexColor(0.8, 0.8, 0.2)  -- Yellow (warning)
+        bar.execZone:Show()
     else
-        hpTex:SetVertexColor(0.2, 0.8, 0.2)  -- Green
-        execZone:Show()
+        bar.hpTex:SetVertexColor(0.2, 0.8, 0.2)  -- Green
+        bar.execZone:Show()
     end
 
-    -- Update TTK display (left side of bar)
+    -- Update TTK display
     local displayTTK = mob.smoothTTK
     if displayTTK and displayTTK > 0 then
-        ttkBarLabel:SetText(TTK.formatTime(displayTTK))
+        bar.ttkLabel:SetText(TTK.formatTime(displayTTK))
 
-        -- 35-second warning: change border and text color
+        -- Warning color for TTK text
         if displayTTK <= WARNING_THRESHOLD then
-            ttkBarLabel:SetTextColor(1, 0.8, 0.2)  -- Yellow text
-            mainFrame:SetBackdropBorderColor(1, 0.6, 0.2, 1)  -- Orange border
+            bar.ttkLabel:SetTextColor(1, 0.8, 0.2)  -- Yellow
         else
-            ttkBarLabel:SetTextColor(1, 1, 1)  -- White text
-            mainFrame:SetBackdropBorderColor(0.4, 0.4, 0.4, 1)  -- Normal border
+            bar.ttkLabel:SetTextColor(1, 1, 1)  -- White
         end
 
-        -- Compute and show DPS (center of bar)
+        -- Compute and show DPS
         local dps = hp / displayTTK
         if dps >= 1000 then
-            dpsLabel:SetText(string.format("%.1fKdps", dps / 1000))
+            bar.dpsLabel:SetText(string.format("%.1fKdps", dps / 1000))
         else
-            dpsLabel:SetText(string.format("%.0fdps", dps))
+            bar.dpsLabel:SetText(string.format("%.0fdps", dps))
         end
     else
-        ttkBarLabel:SetText("--")
-        dpsLabel:SetText("")
-        mainFrame:SetBackdropBorderColor(0.4, 0.4, 0.4, 1)
+        bar.ttkLabel:SetText("")
+        bar.dpsLabel:SetText("")
     end
 
     -- Update Execute timer (only show if above 20%)
     if hpPercent > execThresholdPct then
         local displayTTE = mob.smoothTTE
         if displayTTE and displayTTE > 0 then
-            execLabel:SetText(string.format("ex%s", TTK.formatTime(displayTTE)))
+            bar.execLabel:SetText(string.format("ex%s", TTK.formatTime(displayTTE)))
         else
-            execLabel:SetText("")
+            bar.execLabel:SetText("")
         end
     else
-        execLabel:SetText("")
+        bar.execLabel:SetText("")
+    end
+
+    -- Boss highlight (orange border effect via name color)
+    if mob.isBoss then
+        bar.nameLabel:SetTextColor(1, 0.8, 0.2)  -- Gold for bosses
+    else
+        bar.nameLabel:SetTextColor(1, 1, 1)  -- White for adds
     end
 end
 
-local function ResetDisplay()
-    hpLabel:SetText("--")
-    ttkBarLabel:SetText("--")
-    ttkBarLabel:SetTextColor(1, 1, 1)
-    dpsLabel:SetText("")
-    execLabel:SetText("")
-    -- Reset bar to full width and green
-    hpTex:SetWidth(BAR_WIDTH)
-    hpTex:SetVertexColor(0.2, 0.8, 0.2)
-    execZone:Show()
-    targetName:SetText("No Target")
-    mainFrame:SetBackdropBorderColor(0.4, 0.4, 0.4, 1)
+-- Reset a bar to default state
+local function ResetBar(bar)
+    bar.nameLabel:SetText("")
+    bar.hpLabel:SetText("")
+    bar.ttkLabel:SetText("")
+    bar.ttkLabel:SetTextColor(1, 1, 1)
+    bar.dpsLabel:SetText("")
+    bar.execLabel:SetText("")
+    bar.hpTex:SetWidth(BAR_WIDTH)
+    bar.hpTex:SetVertexColor(0.2, 0.8, 0.2)
+    bar.execZone:Show()
 end
 
 -- ============================================================================
 -- HEALTH EVENT PROCESSING
 -- ============================================================================
 
-local function ProcessHealthEvent(unitID)
-    if not (UnitAffectingCombat(unitID) and UnitIsEnemy(unitID,"player") and string.sub(unitID,3,3) == "F") then return end
+-- Check if unit should be tracked (boss or tracked add)
+local function ShouldTrackUnit(unitID)
+    if not UnitExists(unitID) then return false, false end
+    if not UnitIsEnemy(unitID, "player") then return false, false end
+    if not UnitAffectingCombat(unitID) then return false, false end
 
+    local unitLevel = UnitLevel(unitID)
+    local unitName = UnitName(unitID)
+
+    -- Check ignored list first
+    if TTK_IGNORED_MOBS[unitName] then return false, false end
+
+    -- Boss check (level 63 or -1)
+    if unitLevel == 63 or unitLevel == -1 then
+        return true, true  -- shouldTrack, isBoss
+    end
+
+    -- Tracked add check
+    if IsTrackedAdd(unitName) then
+        return true, false  -- shouldTrack, not a boss
+    end
+
+    return false, false
+end
+
+-- Add a unit to tracking with a bar
+local function StartTrackingUnit(unitID)
+    local shouldTrack, isBoss = ShouldTrackUnit(unitID)
+    if not shouldTrack then return nil end
+
+    -- Already tracking?
+    if trackedMobs[unitID] then
+        return trackedMobs[unitID]
+    end
+
+    -- Get a bar from pool
+    local bar = AcquireBar()
+    if not bar then return nil end  -- No bars available
+
+    local unitName = UnitName(unitID)
+    local mob = CreateMobTracker(unitID, unitName, isBoss)
+    local hp = UnitHealth(unitID)
+    local maxHp = UnitHealthMax(unitID)
+    mob.maxHp = maxHp
+    mob.lastHP = hp
+    mob.bar = bar
+
+    -- Setup bar
+    bar.unitID = unitID
+    bar.isBoss = isBoss
+    bar.creationOrder = mob.creationOrder
+    bar.nameLabel:SetText(unitName)
+    if isBoss then
+        bar.nameLabel:SetTextColor(1, 0.8, 0.2)  -- Gold for bosses
+    else
+        bar.nameLabel:SetTextColor(1, 1, 1)  -- White for adds
+    end
+
+    -- Initial HP display
+    bar.hpLabel:SetText(string.format("%s / %s", FormatHP(hp), FormatHP(maxHp)))
+    local hpPercent = (hp / maxHp) * 100
+    bar.hpTex:SetWidth(math.max(1, BAR_WIDTH * (hpPercent / 100)))
+    if hpPercent <= EXECUTE_THRESHOLD * 100 then
+        bar.hpTex:SetVertexColor(0.8, 0.25, 0.25)
+        bar.execZone:Hide()
+    else
+        bar.hpTex:SetVertexColor(0.2, 0.8, 0.2)
+        bar.execZone:Show()
+    end
+
+    bar:Show()
+
+    trackedMobs[unitID] = mob
+    activeBars[unitID] = bar
+    RepositionBars()
+
+    return mob
+end
+
+-- Remove a unit from tracking
+local function StopTrackingUnit(unitID)
+    local mob = trackedMobs[unitID]
+    if not mob then return end
+
+    if mob.bar then
+        ResetBar(mob.bar)
+        ReleaseBar(mob.bar)
+        activeBars[unitID] = nil
+    end
+
+    trackedMobs[unitID] = nil
+    RepositionBars()
+end
+
+local function ProcessHealthEvent(unitID)
     local hp = UnitHealth(unitID)
     local maxHp = UnitHealthMax(unitID)
     local t = GetTime()
-    local unitName = UnitName(unitID)
-
-    -- Check for boss
-    local unitLevel = UnitLevel(unitID)
-    if unitLevel == 63 or unitLevel == -1 then
-        bossInCombat = true
-    end
 
     -- Handle death
-    if UnitIsDead(unitID) then
-        trackedMobs[unitID] = nil
+    if UnitIsDead(unitID) or hp <= 0 then
+        StopTrackingUnit(unitID)
         return
     end
 
     -- Get or create tracker
     local mob = trackedMobs[unitID]
     if not mob then
-        mob = CreateMobTracker(unitID, unitName)
-        mob.maxHp = maxHp
-        trackedMobs[unitID] = mob
+        mob = StartTrackingUnit(unitID)
+        if not mob then return end
     end
 
     if not mob.fightStartTime then
@@ -304,7 +533,6 @@ local function ProcessHealthEvent(unitID)
         mob.rlsTTK:addSample(hp, maxHp, t)
 
         -- Feed TTE estimator with HP relative to execute threshold
-        -- effectiveHP = currentHP - executeHP, so TTE predicts when this reaches 0
         local executeHP = maxHp * EXECUTE_THRESHOLD
         local effectiveHP = hp - executeHP
         if effectiveHP > 0 then
@@ -312,57 +540,65 @@ local function ProcessHealthEvent(unitID)
         end
     end
 
-    -- Update display if this is current target
-    if unitID == currentTargetGUID then
-        UpdateDisplay(mob, hp, maxHp, hpPercent)
+    -- Update bar display
+    if mob.bar then
+        UpdateBarDisplay(mob, mob.bar, hp, maxHp, hpPercent)
     end
 end
 
 local function ClearAllMobs()
-    trackedMobs = {}
-    currentTargetGUID = nil
-    bossInCombat = false
-    ResetDisplay()
-end
-
-local function RefreshTargetDisplay()
-    local exists, guid = UnitExists("target")
-    if exists and guid and trackedMobs[guid] then
-        local mob = trackedMobs[guid]
-        local hp = UnitHealth("target")
-        local maxHp = UnitHealthMax("target")
-        local hpPercent = (hp / maxHp) * 100
-        UpdateDisplay(mob, hp, maxHp, hpPercent)
+    for unitID, mob in pairs(trackedMobs) do
+        if mob.bar then
+            ResetBar(mob.bar)
+            ReleaseBar(mob.bar)
+        end
     end
+    trackedMobs = {}
+    activeBars = {}
+    creationCounter = 0
+    RepositionBars()
 end
 
 -- ============================================================================
 -- EVENT HANDLING
 -- ============================================================================
 
-mainFrame:SetScript("OnEvent", function()
-    if event == "PLAYER_TARGET_CHANGED" then
-        local exists, guid = UnitExists("target")
-        if exists and guid and not UnitIsFriend("player", "target") then
-            currentTargetGUID = guid
-            targetName:SetText(UnitName("target"))
-            RefreshTargetDisplay()
-        else
-            currentTargetGUID = nil
-            targetName:SetText("No Target")
-        end
+-- Update zone-specific add list
+local function UpdateZoneAdds()
+    local zone = GetRealZoneText()
+    currentZoneAdds = TTK_ZONE_MOBS[zone]
+    if currentZoneAdds then
+        printo("Zone tracking active: " .. zone)
+    end
+end
 
-    elseif event == "UNIT_HEALTH" then
+mainFrame:SetScript("OnEvent", function()
+    if event == "UNIT_HEALTH" then
+        if arg1 and not (UnitAffectingCombat(arg1) and UnitIsEnemy(arg1,"player") and string.sub(arg1,3,3) == "F") then return end
         ProcessHealthEvent(arg1)
 
+    elseif event == "UNIT_FLAGS" then
+        if arg1 and not (UnitAffectingCombat(arg1) and UnitIsEnemy(arg1,"player") and string.sub(arg1,3,3) == "F") then return end
+        -- Unit flags changed - if entering combat and trackable, show bar immediately
+        local shouldTrack, isBoss = ShouldTrackUnit(arg1)
+        if shouldTrack and not trackedMobs[arg1] then
+            StartTrackingUnit(arg1)
+        end
+
     elseif event == "PLAYER_REGEN_ENABLED" then
+        -- Combat ended
         ClearAllMobs()
+
+    elseif event == "ZONE_CHANGED_NEW_AREA" or event == "PLAYER_ENTERING_WORLD" then
+        UpdateZoneAdds()
     end
 end)
 
-mainFrame:RegisterEvent("PLAYER_TARGET_CHANGED")
 mainFrame:RegisterEvent("UNIT_HEALTH")
+mainFrame:RegisterEvent("UNIT_FLAGS")
 mainFrame:RegisterEvent("PLAYER_REGEN_ENABLED")
+mainFrame:RegisterEvent("ZONE_CHANGED_NEW_AREA")
+mainFrame:RegisterEvent("PLAYER_ENTERING_WORLD")
 
 -- ============================================================================
 -- SLASH COMMANDS
@@ -380,8 +616,18 @@ SlashCmdList["TTK"] = function(msg)
     elseif cmd == "reset" then
         ClearAllMobs()
         printo("Tracking reset")
+    elseif cmd == "zone" then
+        local zone = GetRealZoneText()
+        if currentZoneAdds then
+            printo("Zone: " .. zone .. " (" .. table.getn(currentZoneAdds) .. " tracked adds)")
+        else
+            printo("Zone: " .. zone .. " (no tracked adds)")
+        end
+    elseif cmd == "scan" then
+        ScanForTargets()
+        printo("Scanning for targets...")
     else
-        printo("Commands: /ttk show | hide | reset")
+        printo("Commands: /ttk show | hide | reset | zone | scan")
     end
 end
 
@@ -400,5 +646,6 @@ local initFrame = CreateFrame("Frame")
 initFrame:RegisterEvent("VARIABLES_LOADED")
 initFrame:SetScript("OnEvent", function()
     RestoreFramePosition()
+    UpdateZoneAdds()
     printo("TimeToKill loaded. /ttk for commands.")
 end)

@@ -52,9 +52,10 @@ function RLS:addSample(hp, maxHp, t)
     local dhp = self.lastHP - hp  -- Positive when HP decreasing
     local observedDPS = dhp / dt
 
-    -- Skip if no damage (potential intermission)
-    -- But allow small healing/regen through
-    if dhp < -100 then  -- Significant healing, skip
+    -- Skip if no meaningful damage (immunity, intermission, healing)
+    -- Only process samples with actual HP loss
+    if dhp < -100 then
+    -- if dhp <= 0 then
         self.lastHP = hp
         self.lastTime = t
         return
