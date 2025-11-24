@@ -25,6 +25,9 @@ This is not a general TTK addon, it's just for bosses.
 | `/ttk lock` | Toggle frame lock (locked = hidden when no targets, unlocked = always visible) |
 | `/ttk click` | Toggle click-to-target on bars |
 | `/ttk reset` | Reset frame position to center screen |
+| `/ttk test` | Toggle test mode (track any enemy, not just bosses) |
+
+> **Note:** Test mode is enabled by default so you can position the frame by fighting any mob. Once you're comfortable with the bar position, use `/ttk test` to disable it and `/ttk lock` to lock the frame. The addon will then only track raid bosses and configured adds.
 
 ## Ignored Mobs
 

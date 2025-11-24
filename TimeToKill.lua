@@ -8,6 +8,7 @@ local MAX_BARS = 5              -- Maximum tracked targets
 -- Frame state (will be loaded from SavedVariables)
 local isLocked = false
 local clickToTargetEnabled = true
+local testMode = true  -- Track any targeted enemy, not just bosses (default: on)
 
 local function printo(msg)
     DEFAULT_CHAT_FRAME:AddMessage("|cff00ff00[TTK]|r " .. tostring(msg))
@@ -72,6 +73,7 @@ local EXEC_WIDTH = BAR_WIDTH * EXECUTE_THRESHOLD  -- 20% of bar
 local BASE_HEIGHT = 8  -- Padding for mainFrame
 
 local mainFrame = CreateFrame("Frame", "TTKMainFrame", UIParent)
+mainFrame:SetFrameStrata("LOW")  -- Below UIParent (MEDIUM)
 mainFrame:SetWidth(250)
 mainFrame:SetHeight(BASE_HEIGHT)
 mainFrame:SetPoint("CENTER", UIParent, "CENTER", 0, 200)
@@ -269,10 +271,15 @@ local function RepositionBars()
             mainFrame:Hide()
             placeholderLabel:Hide()
         else
-            -- Unlocked: show placeholder
+            -- Unlocked: show placeholder with test mode status
             mainFrame:SetWidth(PLACEHOLDER_WIDTH)
             mainFrame:SetHeight(PLACEHOLDER_HEIGHT)
             mainFrame:Show()
+            if testMode then
+                placeholderLabel:SetText("[TTK] Test Mode")
+            else
+                placeholderLabel:SetText("[TTK] Unlocked")
+            end
             placeholderLabel:Show()
         end
     end
@@ -348,12 +355,19 @@ local function FormatHP(hp)
     end
 end
 
+local function TruncateName(name, maxLen)
+    if string.len(name) > maxLen then
+        return string.sub(name, 1, maxLen) .. "..."
+    end
+    return name
+end
+
 -- Update a single bar's display
 local function UpdateBarDisplay(mob, bar, hp, maxHp, hpPercent)
     local execThresholdPct = EXECUTE_THRESHOLD * 100  -- 20
 
     -- Update name and HP display
-    bar.nameLabel:SetText(mob.name)
+    bar.nameLabel:SetText(TruncateName(mob.name, 16))
     bar.hpLabel:SetText(string.format("%s / %s", FormatHP(hp), FormatHP(maxHp)))
 
     -- Update raid target icon
@@ -458,7 +472,7 @@ end
 -- Check if unit should be tracked (boss or tracked add)
 local function ShouldTrackUnit(unitID)
     if not UnitExists(unitID) then return false, false end
-    if not UnitIsEnemy(unitID, "player") then return false, false end
+    if not UnitCanAttack("player", unitID) then return false, false end
     if not UnitAffectingCombat(unitID) then return false, false end
 
     local unitLevel = UnitLevel(unitID)
@@ -466,6 +480,11 @@ local function ShouldTrackUnit(unitID)
 
     -- Check ignored list first
     if TTK_IGNORED_MOBS[unitName] then return false, false end
+
+    -- Test mode: track any enemy in combat
+    if testMode then
+        return true, false  -- shouldTrack, treat as add
+    end
 
     -- Boss check (proper bosses show as -1) we can add special cases for others if needed
     if unitLevel == -1 then
@@ -506,7 +525,7 @@ local function StartTrackingUnit(unitID)
     bar.unitID = unitID
     bar.isBoss = isBoss
     bar.creationOrder = mob.creationOrder
-    bar.nameLabel:SetText(unitName)
+    bar.nameLabel:SetText(TruncateName(unitName, 16))
     if isBoss then
         bar.nameLabel:SetTextColor(1, 0.8, 0.2)  -- Gold for bosses
     else
@@ -636,11 +655,11 @@ end
 
 mainFrame:SetScript("OnEvent", function()
     if event == "UNIT_HEALTH" then
-        if arg1 and not (UnitAffectingCombat(arg1) and UnitIsEnemy(arg1,"player") and string.sub(arg1,3,3) == "F") then return end
+        if arg1 and not (UnitAffectingCombat(arg1) and UnitCanAttack("player", arg1) and string.sub(arg1,3,3) == "F") then return end
         ProcessHealthEvent(arg1)
 
     elseif event == "UNIT_FLAGS" then
-        if arg1 and not (UnitAffectingCombat(arg1) and UnitIsEnemy(arg1,"player") and string.sub(arg1,3,3) == "F") then return end
+        if arg1 and not (UnitAffectingCombat(arg1) and UnitCanAttack("player", arg1) and string.sub(arg1,3,3) == "F") then return end
         -- Unit flags changed - if entering combat and trackable, show bar immediately
         local shouldTrack, isBoss = ShouldTrackUnit(arg1)
         if shouldTrack and not trackedMobs[arg1] then
@@ -708,8 +727,19 @@ SlashCmdList["TTK"] = function(msg)
         else
             printo("Click-to-target disabled")
         end
+    elseif cmd == "test" then
+        testMode = not testMode
+        TTK_Config = TTK_Config or {}
+        TTK_Config.testMode = testMode
+        RepositionBars()  -- Update placeholder text
+        if testMode then
+            printo("Test mode ON - tracking any enemy in combat")
+        else
+            printo("Test mode OFF - tracking bosses only")
+            ClearAllMobs()
+        end
     else
-        printo("Commands: /ttk lock | click | reset")
+        printo("Commands: /ttk lock | click | reset | test")
     end
 end
 
@@ -726,13 +756,17 @@ end
 
 local function RestoreSettings()
     if TTK_Config then
-        -- Restore lock state (default: locked)
+        -- Restore lock state (default: unlocked)
         if TTK_Config.locked ~= nil then
             isLocked = TTK_Config.locked
         end
         -- Restore click-to-target (default: enabled)
         if TTK_Config.clickToTarget ~= nil then
             clickToTargetEnabled = TTK_Config.clickToTarget
+        end
+        -- Restore test mode (default: enabled)
+        if TTK_Config.testMode ~= nil then
+            testMode = TTK_Config.testMode
         end
     end
     -- Apply settings
