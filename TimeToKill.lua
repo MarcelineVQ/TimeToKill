@@ -685,6 +685,11 @@ SlashCmdList["TTK"] = function(msg)
         TTK_Config = TTK_Config or {}
         TTK_Config.locked = isLocked
         mainFrame:SetMovable(not isLocked)
+        if isLocked then
+            mainFrame:RegisterForDrag(nil)
+        else
+            mainFrame:RegisterForDrag("LeftButton")
+        end
         UpdateBarClickState()
         RepositionBars()
         if isLocked then
@@ -731,6 +736,11 @@ local function RestoreSettings()
     end
     -- Apply settings
     mainFrame:SetMovable(not isLocked)
+    if isLocked then
+        mainFrame:RegisterForDrag(nil)
+    else
+        mainFrame:RegisterForDrag("LeftButton")
+    end
     UpdateBarClickState()
     RepositionBars()
 end
