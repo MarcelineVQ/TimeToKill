@@ -3,6 +3,8 @@
 A World of Warcraft 1.12 addon that estimates time-to-kill for raid bosses and their adds.  
 This is not a general TTK addon, it's just for bosses.  
 
+![](./ttk.png)
+
 ## Features
 
 - **Real-time TTK estimation** - Displays estimated time until boss death based on current DPS
