@@ -5,6 +5,10 @@ local EXECUTE_THRESHOLD = 0.20  -- 20% HP
 local WARNING_THRESHOLD = 40    -- Seconds
 local MAX_BARS = 5              -- Maximum tracked targets
 
+-- Frame state (will be loaded from SavedVariables)
+local isLocked = false
+local clickToTargetEnabled = true
+
 local function printo(msg)
     DEFAULT_CHAT_FRAME:AddMessage("|cff00ff00[TTK]|r " .. tostring(msg))
 end
@@ -15,29 +19,28 @@ end
 
 local TTK_ZONE_MOBS = {
     ["Molten Core"] = {
-        ["Lava Spawn"] = true, ["Son of Flame"] = true, ["Lava Elemental"] = true,
-        ["Firesworn"] = true, ["Lava Reaver"] = true, ["Lava Surger"] = true,
-        ["Core Hound"] = true, ["Ancient Core Hound"] = true,
+        ["Lava Spawn"] = true,
+        ["Flamewaker Protector"] = true,
+        -- ["Flamewaker Priest"] = true, -- probably just noise
     },
-    ["Blackwing Lair"] = {
-        ["Death Talon Captain"] = true, ["Death Talon Flamescale"] = true,
-        ["Death Talon Seether"] = true, ["Death Talon Wyrmkin"] = true,
-        ["Blackwing Mage"] = true, ["Blackwing Warlock"] = true,
-        ["Corrupted Red Whelp"] = true, ["Chromatic Drakonid"] = true,
-    },
+    -- ["Blackwing Lair"] = {
+        -- ["Death Talon Captain"] = true, ["Death Talon Flamescale"] = true,
+        -- ["Death Talon Seether"] = true, ["Death Talon Wyrmkin"] = true,
+        -- ["Blackwing Mage"] = true, ["Blackwing Warlock"] = true,
+        -- ["Corrupted Red Whelp"] = true, ["Chromatic Drakonid"] = true,
+    -- },
     ["Temple of Ahn'Qiraj"] = {
-        ["Anubisath Sentinel"] = true, ["Anubisath Defender"] = true,
-        ["Qiraji Brainwasher"] = true, ["Vekniss Soldier"] = true,
-        ["Emperor Vek'lor"] = true, ["Emperor Vek'nilash"] = true,
+        ["Anubisath Sentinel"] = true,
     },
     ["Naxxramas"] = {
         ["Crypt Guard"] = true,
-        ["Deathknight Understudy"] = true, ["Zombie Chow"] = true,
-        ["Spore"] = true, ["Unstoppable Abomination"] = true,
+        ["Naxxramas Follower"] = true,
+        ["Naxxramas Worshipper"] = true,
     },
     ["Zul'Gurub"] = {
         ["Zealot Zath"] = true,
         ["Zealot Lor'Khan"] = true,
+        ["Ohgan"] = true,
     },
     ["Tower of Karazhan"] = {
         ["Red Owl"] = true,
@@ -83,7 +86,7 @@ mainFrame:SetScript("OnDragStop", function()
     TTK_Config.y = y
 end)
 mainFrame:EnableMouse(true)
-mainFrame:SetMovable(true)
+mainFrame:SetMovable(true)  -- Default: unlocked
 mainFrame:RegisterForDrag("LeftButton")
 
 mainFrame:SetBackdrop({
@@ -94,6 +97,15 @@ mainFrame:SetBackdrop({
 })
 mainFrame:SetBackdropColor(0, 0, 0, 0.9)
 mainFrame:SetBackdropBorderColor(0.4, 0.4, 0.4, 1)
+
+-- Placeholder label for unlocked state with no bars
+local placeholderLabel = mainFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+placeholderLabel:SetPoint("CENTER", mainFrame, "CENTER", -10, 0)
+placeholderLabel:SetText("[TTK] Unlocked")
+placeholderLabel:Hide()
+
+local PLACEHOLDER_WIDTH = BAR_WIDTH
+local PLACEHOLDER_HEIGHT = 24
 
 -- ============================================================================
 -- BAR POOL SYSTEM
@@ -173,8 +185,8 @@ local function CreateBar()
     bar.isBoss = false
     bar.creationOrder = 0
 
-    -- Click to target
-    bar:EnableMouse(true)
+    -- Click to target (enabled state set by UpdateBarClickState)
+    bar:EnableMouse(isLocked and clickToTargetEnabled)
     bar:SetScript("OnMouseUp", function()
         if this.unitID then
             TargetUnit(this.unitID)
@@ -182,6 +194,17 @@ local function CreateBar()
     end)
 
     return bar
+end
+
+-- Update click-to-target state for all bars
+local function UpdateBarClickState()
+    local shouldEnable = isLocked and clickToTargetEnabled
+    for i = 1, table.getn(barPool) do
+        barPool[i]:EnableMouse(shouldEnable)
+    end
+    for unitID, bar in pairs(activeBars) do
+        bar:EnableMouse(shouldEnable)
+    end
 end
 
 -- Initialize bar pool
@@ -235,11 +258,22 @@ local function RepositionBars()
     local numBars = table.getn(sorted)
     if numBars > 0 then
         local totalHeight = BASE_HEIGHT + (numBars * (BAR_HEIGHT + 12 + BAR_SPACING))
+        mainFrame:SetWidth(250)
         mainFrame:SetHeight(totalHeight)
         mainFrame:Show()
+        placeholderLabel:Hide()
     else
-        mainFrame:SetHeight(BASE_HEIGHT)
-        mainFrame:Hide()
+        -- No bars - behavior depends on lock state
+        if isLocked then
+            mainFrame:Hide()
+            placeholderLabel:Hide()
+        else
+            -- Unlocked: show placeholder
+            mainFrame:SetWidth(PLACEHOLDER_WIDTH)
+            mainFrame:SetHeight(PLACEHOLDER_HEIGHT)
+            mainFrame:Show()
+            placeholderLabel:Show()
+        end
     end
 end
 
@@ -432,8 +466,8 @@ local function ShouldTrackUnit(unitID)
     -- Check ignored list first
     if TTK_IGNORED_MOBS[unitName] then return false, false end
 
-    -- Boss check (level 63 or -1)
-    if unitLevel == 63 or unitLevel == -1 then
+    -- Boss check (proper bosses show as -1) we can add special cases for others if needed
+    if unitLevel == -1 then
         return true, true  -- shouldTrack, isBoss
     end
 
@@ -634,27 +668,42 @@ mainFrame:RegisterEvent("PLAYER_ENTERING_WORLD")
 SLASH_TTK1 = "/ttk"
 SlashCmdList["TTK"] = function(msg)
     local cmd = string.lower(msg or "")
-    if cmd == "show" then
-        mainFrame:Show()
-        printo("Frame shown")
-    elseif cmd == "hide" then
-        mainFrame:Hide()
-        printo("Frame hidden")
-    elseif cmd == "reset" then
-        ClearAllMobs()
-        printo("Tracking reset")
-    elseif cmd == "zone" then
-        local zone = GetRealZoneText()
-        if currentZoneAdds then
-            printo("Zone: " .. zone .. " (" .. table.getn(currentZoneAdds) .. " tracked adds)")
-        else
-            printo("Zone: " .. zone .. " (no tracked adds)")
-        end
+    if cmd == "reset" then
+        mainFrame:ClearAllPoints()
+        mainFrame:SetPoint("CENTER", UIParent, "CENTER", 0, 200)
+        TTK_Config = TTK_Config or {}
+        TTK_Config.point = "CENTER"
+        TTK_Config.relPoint = "CENTER"
+        TTK_Config.x = 0
+        TTK_Config.y = 200
+        printo("Frame position reset")
     elseif cmd == "scan" then
         ScanForTargets()
         printo("Scanning for targets...")
+    elseif cmd == "lock" then
+        isLocked = not isLocked
+        TTK_Config = TTK_Config or {}
+        TTK_Config.locked = isLocked
+        mainFrame:SetMovable(not isLocked)
+        UpdateBarClickState()
+        RepositionBars()
+        if isLocked then
+            printo("Frame locked")
+        else
+            printo("Frame unlocked - drag to move")
+        end
+    elseif cmd == "click" then
+        clickToTargetEnabled = not clickToTargetEnabled
+        TTK_Config = TTK_Config or {}
+        TTK_Config.clickToTarget = clickToTargetEnabled
+        UpdateBarClickState()
+        if clickToTargetEnabled then
+            printo("Click-to-target enabled")
+        else
+            printo("Click-to-target disabled")
+        end
     else
-        printo("Commands: /ttk show | hide | reset | zone | scan")
+        printo("Commands: /ttk lock | click | reset")
     end
 end
 
@@ -669,10 +718,28 @@ local function RestoreFramePosition()
     end
 end
 
+local function RestoreSettings()
+    if TTK_Config then
+        -- Restore lock state (default: locked)
+        if TTK_Config.locked ~= nil then
+            isLocked = TTK_Config.locked
+        end
+        -- Restore click-to-target (default: enabled)
+        if TTK_Config.clickToTarget ~= nil then
+            clickToTargetEnabled = TTK_Config.clickToTarget
+        end
+    end
+    -- Apply settings
+    mainFrame:SetMovable(not isLocked)
+    UpdateBarClickState()
+    RepositionBars()
+end
+
 local initFrame = CreateFrame("Frame")
 initFrame:RegisterEvent("VARIABLES_LOADED")
 initFrame:SetScript("OnEvent", function()
     RestoreFramePosition()
+    RestoreSettings()
     UpdateZoneAdds()
     printo("TimeToKill loaded. /ttk for commands.")
 end)
