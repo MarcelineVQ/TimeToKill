@@ -73,7 +73,7 @@ local EXEC_WIDTH = BAR_WIDTH * EXECUTE_THRESHOLD  -- 20% of bar
 local BASE_HEIGHT = 8  -- Padding for mainFrame
 
 local mainFrame = CreateFrame("Frame", "TTKMainFrame", UIParent)
-mainFrame:SetFrameStrata("LOW")  -- Below UIParent (MEDIUM)
+mainFrame:SetFrameStrata("LOW")  -- Below UIParent (MEDIUM) -- hopefully reduce frame crash issues
 mainFrame:SetWidth(250)
 mainFrame:SetHeight(BASE_HEIGHT)
 mainFrame:SetPoint("CENTER", UIParent, "CENTER", 0, 200)

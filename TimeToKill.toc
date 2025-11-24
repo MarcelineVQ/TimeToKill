@@ -3,7 +3,7 @@
 ## Notes: Boss TTK estimation using RLS with forgetting factor
 ## Author: Ehawne
 ## Version: 3.1
-## SavedVariables: TTK_Config
+## SavedVariablesPerCharacter: TTK_Config
 
 # Core utilities (must load first)
 TTK_Core.lua
