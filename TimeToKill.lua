@@ -160,6 +160,14 @@ local function CreateBar()
     bar.execLabel:SetPoint("RIGHT", bar.barFrame, "RIGHT", -4, 0)
     bar.execLabel:SetTextColor(1, 0.9, 0.9)
 
+    -- Raid target icon (center of bar)
+    bar.raidIcon = bar.barFrame:CreateTexture(nil, "OVERLAY")
+    bar.raidIcon:SetTexture("Interface\\TargetingFrame\\UI-RaidTargetingIcons")
+    bar.raidIcon:SetWidth(BAR_HEIGHT - 2)
+    bar.raidIcon:SetHeight(BAR_HEIGHT - 2)
+    bar.raidIcon:SetPoint("CENTER", bar.barFrame, "CENTER", 0, 0)
+    bar.raidIcon:Hide()
+
     -- Metadata
     bar.unitID = nil
     bar.isBoss = false
@@ -313,6 +321,15 @@ local function UpdateBarDisplay(mob, bar, hp, maxHp, hpPercent)
     bar.nameLabel:SetText(mob.name)
     bar.hpLabel:SetText(string.format("%s / %s", FormatHP(hp), FormatHP(maxHp)))
 
+    -- Update raid target icon
+    local raidIndex = GetRaidTargetIndex(mob.unitID)
+    if raidIndex then
+        SetRaidTargetIconTexture(bar.raidIcon, raidIndex)
+        bar.raidIcon:Show()
+    else
+        bar.raidIcon:Hide()
+    end
+
     -- Update bar width
     local barWidth = math.max(1, BAR_WIDTH * (hpPercent / 100))
     bar.hpTex:SetWidth(barWidth)
@@ -396,6 +413,7 @@ local function ResetBar(bar)
     bar.hpTex:SetWidth(BAR_WIDTH)
     bar.hpTex:SetVertexColor(0.2, 0.8, 0.2)
     bar.execZone:Show()
+    bar.raidIcon:Hide()
 end
 
 -- ============================================================================
@@ -470,6 +488,15 @@ local function StartTrackingUnit(unitID)
     else
         bar.hpTex:SetVertexColor(0.2, 0.8, 0.2)
         bar.execZone:Show()
+    end
+
+    -- Initial raid icon
+    local raidIndex = GetRaidTargetIndex(unitID)
+    if raidIndex then
+        SetRaidTargetIconTexture(bar.raidIcon, raidIndex)
+        bar.raidIcon:Show()
+    else
+        bar.raidIcon:Hide()
     end
 
     bar:Show()
