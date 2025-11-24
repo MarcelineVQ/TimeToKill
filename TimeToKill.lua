@@ -100,12 +100,13 @@ mainFrame:SetBackdropBorderColor(0.4, 0.4, 0.4, 1)
 
 -- Placeholder label for unlocked state with no bars
 local placeholderLabel = mainFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-placeholderLabel:SetPoint("CENTER", mainFrame, "CENTER", -10, 0)
+placeholderLabel:SetPoint("CENTER", mainFrame, "CENTER", 0, 0)
 placeholderLabel:SetText("[TTK] Unlocked")
 placeholderLabel:Hide()
 
-local PLACEHOLDER_WIDTH = BAR_WIDTH
-local PLACEHOLDER_HEIGHT = 24
+-- Unlocked placeholder uses max size so users can position properly
+local PLACEHOLDER_WIDTH = 250
+local PLACEHOLDER_HEIGHT = BASE_HEIGHT + (MAX_BARS * (BAR_HEIGHT + 12 + BAR_SPACING))
 
 -- ============================================================================
 -- BAR POOL SYSTEM

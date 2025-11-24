@@ -1,6 +1,7 @@
 # TimeToKill (TTK)
 
-A World of Warcraft 1.12 addon that estimates time-to-kill for raid bosses and important adds.
+A World of Warcraft 1.12 addon that estimates time-to-kill for raid bosses and their adds.  
+This is not a general TTK addon, it's just for bosses.  
 
 ## Features
 
@@ -35,5 +36,5 @@ Some bosses (like Majordomo Executus) are ignored by default. Edit `TTK_IGNORED_
 - Display values smoothed for stability
 - Automatically skips samples during immunity phases or when no damage occurs
 
---
-* Made by and for Weird Vibes of Turtle WoW
+___
+* Made by and for Weird Vibes of Turtle Wow  
