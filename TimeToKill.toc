@@ -2,7 +2,7 @@
 ## Title: Time To Kill
 ## Notes: Boss TTK estimation using RLS with forgetting factor
 ## Author: Ehawne
-## Version: 3.1
+## Version: 3.1.1
 ## SavedVariablesPerCharacter: TTK_Config
 
 # Core utilities (must load first)
